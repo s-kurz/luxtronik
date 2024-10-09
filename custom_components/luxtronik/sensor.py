@@ -234,7 +234,7 @@ class LuxtronikStatusSensorEntity(LuxtronikSensorEntity, SensorEntity):
             ):
                 self._attr_cache[SA.EVU_FIRST_START_TIME] = time_now
             else:
-                self._attr_cache[SA.EVU_SECOND_START_TIME] = time_now 
+                self._attr_cache[SA.EVU_SECOND_START_TIME] = time_now
                 if weekday not in self._attr_cache[SA.EVU_DAYS]:
                     self._attr_cache[SA.EVU_DAYS].append(weekday)
         elif self._attr_native_value != evu and str(self._last_state) == evu:

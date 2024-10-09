@@ -218,7 +218,6 @@ class LuxtronikStatusSensorEntity(LuxtronikSensorEntity, SensorEntity):
         weekday = datetime.today().weekday()
         if not isinstance(self._attr_cache[SA.EVU_DAYS], list):
             self._attr_cache[SA.EVU_DAYS] = list()
-
         if self._attr_native_value is None or self._last_state is None:
             pass
         elif self._attr_native_value == evu and str(self._last_state) != evu:
@@ -400,6 +399,8 @@ class LuxtronikStatusSensorEntity(LuxtronikSensorEntity, SensorEntity):
         if not isinstance(self._attr_cache[SA.EVU_DAYS], list):
             self._attr_cache[SA.EVU_DAYS] = list() 
         evu_pause = 0
+        if not isinstance(self._attr_cache[SA.EVU_DAYS], list):
+            self._attr_cache[SA.EVU_DAYS] = list()
         if not self._attr_cache[SA.EVU_DAYS] and weekday not in self._attr_cache[SA.EVU_DAYS]:
             evu_pause += (24 - datetime.now().hour)*60 - datetime.now().minute
             for i in range(1, 7):
@@ -453,16 +454,16 @@ class LuxtronikStatusSensorEntity(LuxtronikSensorEntity, SensorEntity):
         if value is not None: 
             if ',' in str(value):
                 vals = list() 
-                for day in str(value).split(","):
-                    try :
-                        vals.append(calendar.day_name.index(day))
-                    except ValueError :
-                        pass
+                for day in str(value).split(","): 
+                    for idx, name in enumerate(calendar.day_name):
+                        if day == name: 
+                            vals.append(idx)
+                            break
                 return vals
             if ":" in str(value):
                 vals = str(value).split(":")
                 return time(int(vals[0]), int(vals[1]))
-        return time.min
+        return time.min 
 
 
 class LuxtronikIndexSensor(LuxtronikSensorEntity, SensorEntity):

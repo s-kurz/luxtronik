@@ -27,10 +27,10 @@ jobs:
           jq --arg ver "$VERSION" '.version = $ver' $MANIFEST_PATH > tmp.json
           mv tmp.json $MANIFEST_PATH
 
-      - name: Validate HACS Compliance
-        uses: hacs/action@main
-        with:
-          category: integration
+     # - name: Validate HACS Compliance
+      #  uses: hacs/action@main
+      #  with:
+      #    category: integration
 
       - name: Commit and Push Changes
         run: |

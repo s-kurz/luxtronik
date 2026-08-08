@@ -4,94 +4,176 @@ on:
   workflow_dispatch:
     inputs:
       release_type:
-        description: 'Choose the type of release you want to create'
+        description: "Choose the type of release you want to create"
         required: true
-        default: 'pre-release'
+        default: "pre-release"
         type: choice
         options:
           - pre-release
           - full-release
 
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
+      # ------------------------------------------------------------
+      # Checkout the branch selected in "Run workflow"
+      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
+      # ------------------------------------------------------------
+      # Generate version
+      #
+      # Stable:
+      #   2026.8.0
+      #
+      # Pre-release:
+      #   2026.8.0b123
+      #
+      # github.run_number makes pre-release versions unique.
+      # ------------------------------------------------------------
       - name: Generate Version Number
         id: version
+        shell: bash
         run: |
-          VERSION=$(date +'%Y.%m.%d')
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          YEAR=$(date -u +'%Y')
+          MONTH=$(date -u +'%-m')
 
+          # Find latest stable release and determine next patch number.
+          LATEST_STABLE=$(gh api \
+            "repos/${{ github.repository }}/releases" \
+            --paginate \
+            --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' \
+            | head -n 1 || true)
+
+          if [[ "$LATEST_STABLE" =~ ^[0-9]+\.[0-9]+\.([0-9]+)$ ]]; then
+            LATEST_YEAR=$(echo "$LATEST_STABLE" | cut -d. -f1)
+            LATEST_MONTH=$(echo "$LATEST_STABLE" | cut -d. -f2)
+            LATEST_PATCH="${BASH_REMATCH[1]}"
+
+            if [[ "$LATEST_YEAR" == "$YEAR" && "$LATEST_MONTH" == "$MONTH" ]]; then
+              PATCH=$((LATEST_PATCH + 1))
+            else
+              PATCH=0
+            fi
+          else
+            PATCH=0
+          fi
+
+          VERSION="${YEAR}.${MONTH}.${PATCH}"
+
+          if [[ "${{ inputs.release_type }}" == "pre-release" ]]; then
+            VERSION="${VERSION}b${{ github.run_number }}"
+          fi
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+          echo "Release type: ${{ inputs.release_type }}"
+          echo "Generated version: $VERSION"
+
+      # ------------------------------------------------------------
+      # Update manifest.json
+      # ------------------------------------------------------------
       - name: Update manifest.json
+        shell: bash
         run: |
           MANIFEST_PATH="custom_components/luxtronik2/manifest.json"
-          jq --arg ver "$VERSION" '.version = $ver' $MANIFEST_PATH > tmp.json
-          mv tmp.json $MANIFEST_PATH
 
-      #- name: Validate HACS Compliance
-      #  uses: hacs/action@main
-      #  with:
-      #    category: integration
+          jq --arg version "$VERSION" \
+            '.version = $version' \
+            "$MANIFEST_PATH" > tmp.json
 
+          mv tmp.json "$MANIFEST_PATH"
+
+          echo "Updated manifest to version $VERSION"
+
+      # ------------------------------------------------------------
+      # Validate manifest
+      # ------------------------------------------------------------
+      - name: Validate manifest.json
+        shell: bash
+        run: |
+          jq empty custom_components/luxtronik2/manifest.json
+
+          VERSION_FROM_MANIFEST=$(jq -r '.version' \
+            custom_components/luxtronik2/manifest.json)
+
+          if [[ "$VERSION_FROM_MANIFEST" != "$VERSION" ]]; then
+            echo "Manifest version mismatch!"
+            echo "Expected: $VERSION"
+            echo "Found:    $VERSION_FROM_MANIFEST"
+            exit 1
+          fi
+
+      # ------------------------------------------------------------
+      # Commit and push version change
+      # ------------------------------------------------------------
       - name: Commit and Push Changes
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add custom_components/luxtronik2/manifest.json
 
-          git diff --quiet && git diff --staged --quiet || git commit -m "chore: bump version to ${{ env.VERSION }}"
-          git push
+          if git diff --cached --quiet; then
+            echo "No manifest changes to commit."
+          else
+            git commit -m "chore: bump version to $VERSION"
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
 
+      # ------------------------------------------------------------
+      # Create ZIP
+      # ------------------------------------------------------------
       - name: Zip integration
+        shell: bash
         run: |
           cd custom_components/luxtronik2
-          zip -r ../../luxtronik2.zip .
-          
-      - name: Get latest release tag
+          zip -r "$GITHUB_WORKSPACE/luxtronik2.zip" .
+
+      # ------------------------------------------------------------
+      # Find latest stable release
+      # ------------------------------------------------------------
+      - name: Get latest stable release tag
+        id: previous_release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          if VERSION=$(gh api repos/s-kurz/luxtronik/releases/latest --jq '.tag_name' 2>/dev/null); then
-            echo "Using latest stable release: $VERSION"
-          elif VERSION=$(gh api repos/s-kurz/luxtronik/releases --jq '.[0].tag_name' 2>/dev/null) && [ -n "$VERSION" ] && [ "$VERSION" != "null" ]; then
-            echo "Using latest pre-release: $VERSION"
-          else
-            echo "No releases found."
-            VERSION="0.0.0"   # oder "" oder exit 1
-          fi
-      
-          echo "PREVIOUS_STABLE=$VERSION" >> "$GITHUB_ENV"
-    
-      # Fetch the latest full release tag so pre-releases can also list every PR since then
-      #- name: Get Latest Full Release Tag
-      #  id: stable_tag
-      #  env:
-      #    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      #  run: |
-      #    # Fetches the 'latest' release (this automatically ignores pre-releases on GitHub)
-      #    LATEST_TAG=$(gh api repos/${{ github.repository }}/releases/latest --jq '.tag_name')
-      #    echo "PREVIOUS_STABLE=$LATEST_TAG" >> $GITHUB_ENV
+          PREVIOUS_STABLE=$(gh api \
+            "repos/${{ github.repository }}/releases" \
+            --paginate \
+            --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' \
+            | head -n 1 || true)
 
-      # Creates the release based on your choice
+          if [[ -n "$PREVIOUS_STABLE" ]]; then
+            echo "Previous stable release: $PREVIOUS_STABLE"
+            echo "tag=$PREVIOUS_STABLE" >> "$GITHUB_OUTPUT"
+          else
+            echo "No previous stable release found."
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ------------------------------------------------------------
+      # Create GitHub Release
+      # ------------------------------------------------------------
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.VERSION }}
+          target_commitish: ${{ github.ref_name }}
           name: ${{ env.VERSION }}
           generate_release_notes: true
-          # Always compare against the previous full release, so pre-release notes include
-          # every PR merged since the last full release too
-          previous_tag: ${{ env.PREVIOUS_STABLE }}
-          # Prerelease is enabled (true) when you choose pre-release, and disabled (false) for a full-release
-          prerelease: ${{ github.event.inputs.release_type == 'pre-release' }}
-          # Ensures a full-release is actually marked as the official 'latest' on GitHub
-          make_latest: ${{ github.event.inputs.release_type == 'full-release' && 'true' || 'false' }}
+          previous_tag: ${{ steps.previous_release.outputs.tag }}
+          prerelease: ${{ inputs.release_type == 'pre-release' }}
+          make_latest: ${{ inputs.release_type == 'full-release' && 'true' || 'false' }}
           files: luxtronik2.zip

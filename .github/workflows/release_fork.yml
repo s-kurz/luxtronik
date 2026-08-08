@@ -1,4 +1,4 @@
-name: Create HACS Release
+name: Create HACS Release Fork
 
 on:
   workflow_dispatch:
